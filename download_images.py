@@ -6,10 +6,6 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 
-# ... inside the loop
-
-
-
 # === CONFIGURATION ===
 json_file_path = "/Users/anri/PycharmProjects/pythonProject2/hokusai_painting_links.json"  # <- Fill this with your JSON path
 output_folder = "hokusai_output"
@@ -58,26 +54,45 @@ with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
                 metadata['Image Filename'] = image_filename
 
                 # === Download image
+                print(f"📥 Downloading image: {image_filename}")
                 img_data = requests.get(image_url).content
                 with open(os.path.join(image_folder, image_filename), 'wb') as f_img:
                     f_img.write(img_data)
             else:
                 print("⚠️ Image not found.")
 
-            # === Parse metadata from <ul> list ===
-            ul = soup.find('ul')
-            if ul:
-                for li in ul.find_all('li'):
-                    key_elem = li.find('span')
-                    if key_elem:
-                        key = key_elem.text.replace(':', '').strip()
-                        value = li.get_text().replace(key_elem.text, '').strip()
+            # === Parse metadata from the LAST <ul> list (this was the fix!) ===
+            ul_elements = soup.find_all('ul')
+            if ul_elements:
+                # Get the last <ul> element which contains the metadata
+                metadata_ul = ul_elements[-1]
+                print(f"🔍 Found {len(ul_elements)} <ul> elements, using the last one for metadata")
+
+                for li in metadata_ul.find_all('li'):
+                    li_text = li.get_text()
+                    # Split on first colon to separate key and value
+                    if ':' in li_text:
+                        key, value = li_text.split(':', 1)
+                        key = key.strip()
+                        value = value.strip()
+
+                        # Map the key to our fieldnames if it exists
                         if key in fieldnames:
                             metadata[key] = value
+                            print(f"  ✓ {key}: {value}")
+            else:
+                print("⚠️ No <ul> elements found for metadata")
 
             writer.writerow(metadata)
+            print(f"✅ Completed processing item {index}")
             time.sleep(1)  # Be kind to the server
+
         except Exception as e:
             print(f"❌ Error processing {url}: {e}")
+            # Still write a row with basic info even if there's an error
+            error_metadata = {key: '' for key in fieldnames}
+            error_metadata['Index'] = index
+            error_metadata['Page URL'] = url
+            writer.writerow(error_metadata)
 
-print("✅ All done.")
+print("✅ All done! Check your CSV file for the metadata.")
