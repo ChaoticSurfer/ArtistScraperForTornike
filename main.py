@@ -15,7 +15,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 import requests
 from urllib.parse import urljoin, urlparse
@@ -241,43 +241,179 @@ class HokusaiLinkScraper:
             raise Exception("Could not find any suitable container")
 
     def scroll_and_load_content(self, container):
-        """Scroll through the container to load more content"""
+        """Scroll through the container to load more content with proper delays for lazy loading"""
         self.logger.info("Scrolling to load more content...")
 
         try:
-            # Try scrolling the specific container first
-            self.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", container)
-            time.sleep(self.delay)
+            # First, get container dimensions to understand scrolling behavior
+            container_width = self.driver.execute_script("return arguments[0].scrollWidth", container)
+            container_height = self.driver.execute_script("return arguments[0].scrollHeight", container)
+            visible_width = self.driver.execute_script("return arguments[0].clientWidth", container)
+            visible_height = self.driver.execute_script("return arguments[0].clientHeight", container)
 
-            # Also try scrolling the page
-            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(self.delay)
+            self.logger.info(f"Container dimensions - Width: {container_width}, Height: {container_height}")
+            self.logger.info(f"Visible area - Width: {visible_width}, Height: {visible_height}")
 
-            # Multiple scroll attempts to trigger lazy loading
-            for i in range(5):
-                # Scroll down
-                self.driver.execute_script("window.scrollBy(0, 500);")
-                time.sleep(1)
+            # Count initial links
+            initial_links = len(self.scraped_links)
 
-                # Scroll container
-                try:
-                    self.driver.execute_script("arguments[0].scrollBy(0, 200)", container)
-                except:
-                    pass
-                time.sleep(1)
+            # Horizontal scrolling (most important for Google Arts & Culture galleries)
+            if container_width > visible_width:
+                self.logger.info("Performing horizontal scrolling...")
+                scroll_steps = max(10, container_width // 200)  # More steps for wider content
+
+                for step in range(scroll_steps):
+                    scroll_position = (step + 1) * (container_width // scroll_steps)
+                    self.logger.info(f"Horizontal scroll step {step + 1}/{scroll_steps} to position {scroll_position}")
+
+                    # Scroll horizontally
+                    self.driver.execute_script("arguments[0].scrollLeft = arguments[1]", container, scroll_position)
+
+                    # Wait for lazy loading (increased delay)
+                    time.sleep(2.5)  # Increased from 1-2 to 2.5 seconds
+
+                    # Check if new links appeared
+                    self.scrape_visible_links(container)
+                    new_links = len(self.scraped_links) - initial_links
+                    if new_links > 0:
+                        self.logger.info(f"Found {new_links} new links after horizontal scroll")
+                        initial_links = len(self.scraped_links)
+
+            # Vertical scrolling
+            if container_height > visible_height:
+                self.logger.info("Performing vertical scrolling...")
+                scroll_steps = max(5, container_height // 300)
+
+                for step in range(scroll_steps):
+                    scroll_position = (step + 1) * (container_height // scroll_steps)
+                    self.logger.info(f"Vertical scroll step {step + 1}/{scroll_steps} to position {scroll_position}")
+
+                    # Scroll vertically
+                    self.driver.execute_script("arguments[0].scrollTop = arguments[1]", container, scroll_position)
+
+                    # Wait for lazy loading
+                    time.sleep(2.5)
+
+                    # Check if new links appeared
+                    self.scrape_visible_links(container)
+                    new_links = len(self.scraped_links) - initial_links
+                    if new_links > 0:
+                        self.logger.info(f"Found {new_links} new links after vertical scroll")
+                        initial_links = len(self.scraped_links)
+
+            # Additional comprehensive scrolling patterns
+            self.logger.info("Performing comprehensive scrolling patterns...")
+
+            # Pattern 1: Scroll to end and back
+            self.driver.execute_script("arguments[0].scrollLeft = arguments[0].scrollWidth", container)
+            time.sleep(3)
+            self.scrape_visible_links(container)
+
+            self.driver.execute_script("arguments[0].scrollLeft = 0", container)
+            time.sleep(3)
+            self.scrape_visible_links(container)
+
+            # Pattern 2: Small incremental scrolls to trigger all lazy loading
+            current_scroll = 0
+            scroll_increment = 100
+            max_scroll = container_width
+
+            self.logger.info("Performing fine-grained horizontal scrolling...")
+            while current_scroll < max_scroll:
+                current_scroll += scroll_increment
+                self.driver.execute_script("arguments[0].scrollLeft = arguments[1]", container, current_scroll)
+                time.sleep(1.5)  # Shorter delay for small increments
+
+                # Every 5th scroll, do a longer wait and check for links
+                if current_scroll % (scroll_increment * 5) == 0:
+                    time.sleep(2)
+                    self.scrape_visible_links(container)
+                    new_total = len(self.scraped_links)
+                    self.logger.info(f"Scroll position {current_scroll}: {new_total} total links")
+
+            # Final wait and scrape
+            time.sleep(3)
+            self.scrape_visible_links(container)
 
         except Exception as e:
             self.logger.warning(f"Scrolling failed: {str(e)}")
 
     def scrape_all_links(self, container):
-        """Final comprehensive scrape of all links"""
+        """Final comprehensive scrape of all links with additional scrolling strategies"""
         self.logger.info("Performing final comprehensive link scrape...")
 
         # Wait a bit more for any lazy-loaded content
         time.sleep(3)
 
-        # Scrape again after scrolling
+        # Try alternative scrolling methods that might trigger more content
+        self.logger.info("Trying alternative scrolling methods...")
+
+        try:
+            # Method 1: Use ActionChains for more natural scrolling
+            actions = ActionChains(self.driver)
+            actions.move_to_element(container)
+            actions.perform()
+            time.sleep(1)
+
+            # Scroll with arrow keys (simulates user interaction)
+            for _ in range(20):
+                actions.send_keys_to_element(container, u'\ue014')  # Right arrow
+                actions.perform()
+                time.sleep(0.5)
+
+            time.sleep(3)
+            self.scrape_visible_links(container)
+
+            # Method 2: Scroll with mouse wheel simulation
+            for i in range(10):
+                self.driver.execute_script("""
+                    var event = new WheelEvent('wheel', {
+                        deltaX: 100,
+                        deltaY: 0,
+                        bubbles: true
+                    });
+                    arguments[0].dispatchEvent(event);
+                """, container)
+                time.sleep(0.8)
+
+            time.sleep(3)
+            self.scrape_visible_links(container)
+
+            # Method 3: Try clicking/focusing elements to trigger loading
+            try:
+                clickable_elements = container.find_elements(By.XPATH, ".//div[@role='button'] | .//a | .//button")
+                self.logger.info(f"Found {len(clickable_elements)} clickable elements")
+
+                # Click a few elements to potentially trigger more content
+                for i, element in enumerate(clickable_elements[:5]):
+                    try:
+                        self.driver.execute_script("arguments[0].focus();", element)
+                        time.sleep(0.5)
+                        # Don't actually click, just focus to avoid navigation
+                    except:
+                        pass
+
+            except Exception as e:
+                self.logger.debug(f"Element interaction failed: {str(e)}")
+
+            # Method 4: Final aggressive scrolling
+            self.logger.info("Final aggressive scrolling attempt...")
+
+            # Scroll to various positions multiple times
+            positions = [0, 0.25, 0.5, 0.75, 1.0, 0.5, 0]  # Including return trips
+            for pos in positions:
+                scroll_pos = int(self.driver.execute_script("return arguments[0].scrollWidth", container) * pos)
+                self.driver.execute_script("arguments[0].scrollLeft = arguments[1]", container, scroll_pos)
+                time.sleep(2.5)
+                self.scrape_visible_links(container)
+
+        except Exception as e:
+            self.logger.warning(f"Alternative scrolling methods failed: {str(e)}")
+
+        # Final scrape after all scrolling attempts
         self.scrape_visible_links(container)
+
+        self.logger.info(f"Final total links found: {len(self.scraped_links)}")
 
     def scrape_visible_links(self, container):
         """Scrape currently visible painting links"""
