@@ -7,6 +7,8 @@ Strategy: Use Selenium to interact with lazy-loaded content on Google Arts & Cul
 import time
 import json
 import logging
+import os
+from pathlib import Path
 from typing import List, Set
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -33,6 +35,9 @@ class HokusaiLinkScraper:
         self.delay = delay
         self.scraped_links = set()
 
+        # Get the directory where this script is located
+        self.script_dir = Path(__file__).parent.absolute()
+
         # Setup logging
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
         self.logger = logging.getLogger(__name__)
@@ -54,6 +59,7 @@ class HokusaiLinkScraper:
         """Main method to orchestrate the scraping process"""
         try:
             self.logger.info("Starting Hokusai painting links scraping...")
+            self.logger.info(f"Script directory: {self.script_dir}")
 
             # Step 1: Load the page
             self.load_page()
@@ -234,6 +240,45 @@ class HokusaiLinkScraper:
             self.logger.error(f"Last resort failed: {str(e)}")
             raise Exception("Could not find any suitable container")
 
+    def scroll_and_load_content(self, container):
+        """Scroll through the container to load more content"""
+        self.logger.info("Scrolling to load more content...")
+
+        try:
+            # Try scrolling the specific container first
+            self.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", container)
+            time.sleep(self.delay)
+
+            # Also try scrolling the page
+            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(self.delay)
+
+            # Multiple scroll attempts to trigger lazy loading
+            for i in range(5):
+                # Scroll down
+                self.driver.execute_script("window.scrollBy(0, 500);")
+                time.sleep(1)
+
+                # Scroll container
+                try:
+                    self.driver.execute_script("arguments[0].scrollBy(0, 200)", container)
+                except:
+                    pass
+                time.sleep(1)
+
+        except Exception as e:
+            self.logger.warning(f"Scrolling failed: {str(e)}")
+
+    def scrape_all_links(self, container):
+        """Final comprehensive scrape of all links"""
+        self.logger.info("Performing final comprehensive link scrape...")
+
+        # Wait a bit more for any lazy-loaded content
+        time.sleep(3)
+
+        # Scrape again after scrolling
+        self.scrape_visible_links(container)
+
     def scrape_visible_links(self, container):
         """Scrape currently visible painting links"""
         self.logger.info("Scraping visible links...")
@@ -350,7 +395,7 @@ class HokusaiLinkScraper:
         return True
 
     def save_results(self):
-        """Save scraped links to files"""
+        """Save scraped links to files in the script directory"""
         # Save as JSON
         links_list = sorted(list(self.scraped_links))
 
@@ -358,21 +403,30 @@ class HokusaiLinkScraper:
             'total_links': len(links_list),
             'scrape_timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
             'source_url': self.target_url,
+            'script_directory': str(self.script_dir),
             'links': links_list
         }
 
-        with open('hokusai_painting_links.json', 'w', encoding='utf-8') as f:
+        # Create file paths in script directory
+        json_file_path = self.script_dir / 'hokusai_painting_links.json'
+        txt_file_path = self.script_dir / 'hokusai_painting_links.txt'
+
+        # Save as JSON
+        with open(json_file_path, 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
 
         # Save as plain text for easy reading
-        with open('hokusai_painting_links.txt', 'w', encoding='utf-8') as f:
+        with open(txt_file_path, 'w', encoding='utf-8') as f:
             f.write(f"Hokusai Painting Links - Total: {len(links_list)}\n")
             f.write(f"Scraped on: {results['scrape_timestamp']}\n")
+            f.write(f"Script directory: {self.script_dir}\n")
             f.write("=" * 50 + "\n\n")
             for i, link in enumerate(links_list, 1):
                 f.write(f"{i:3d}. {link}\n")
 
-        self.logger.info("Results saved to hokusai_painting_links.json and hokusai_painting_links.txt")
+        self.logger.info(f"Results saved to:")
+        self.logger.info(f"  JSON: {json_file_path}")
+        self.logger.info(f"  TXT:  {txt_file_path}")
 
     def cleanup(self):
         """Clean up resources"""
@@ -387,6 +441,11 @@ class HokusaiLinkScraper:
 
 def main():
     """Main execution function"""
+    # Get script directory for output information
+    script_dir = Path(__file__).parent.absolute()
+    print(f"Script running from: {script_dir}")
+    print(f"Output files will be saved to: {script_dir}")
+
     # Create scraper instance
     scraper = HokusaiLinkScraper(headless=False, delay=2)  # Set headless=True for production
 
@@ -404,13 +463,15 @@ def main():
         print(f"Target was: 955 items")
         print(f"Coverage: {len(links) / 955 * 100:.1f}%" if len(
             links) <= 955 else f"Found {len(links) - 955} extra links!")
+        print(f"\nFiles saved in: {script_dir}")
+        print(f"  - hokusai_painting_links.json")
+        print(f"  - hokusai_painting_links.txt")
         print(f"\nFirst 5 links:")
         for i, link in enumerate(links[:5], 1):
             print(f"{i}. {link}")
 
         if len(links) > 5:
             print("...")
-            print(f"Files saved: hokusai_painting_links.json, hokusai_painting_links.txt")
 
     except KeyboardInterrupt:
         print("\nScraping interrupted by user")
