@@ -15,6 +15,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 import requests
@@ -241,102 +242,284 @@ class HokusaiLinkScraper:
             raise Exception("Could not find any suitable container")
 
     def scroll_and_load_content(self, container):
-        """Scroll through the container to load more content with proper delays for lazy loading"""
-        self.logger.info("Scrolling to load more content...")
+        """Navigate through content using horizontal navigation buttons with proper delays for lazy loading"""
+        self.logger.info("Looking for horizontal navigation buttons...")
 
         try:
-            # First, get container dimensions to understand scrolling behavior
-            container_width = self.driver.execute_script("return arguments[0].scrollWidth", container)
-            container_height = self.driver.execute_script("return arguments[0].scrollHeight", container)
-            visible_width = self.driver.execute_script("return arguments[0].clientWidth", container)
-            visible_height = self.driver.execute_script("return arguments[0].clientHeight", container)
-
-            self.logger.info(f"Container dimensions - Width: {container_width}, Height: {container_height}")
-            self.logger.info(f"Visible area - Width: {visible_width}, Height: {visible_height}")
+            # Button container path provided by user
+            button_container_xpath = "/html/body/div[3]/div/div[3]/div[2]/div/div[2]/span[1]/div/div/div[2]/div"
 
             # Count initial links
             initial_links = len(self.scraped_links)
+            self.logger.info(f"Starting with {initial_links} links")
 
-            # Horizontal scrolling (most important for Google Arts & Culture galleries)
-            if container_width > visible_width:
-                self.logger.info("Performing horizontal scrolling...")
-                scroll_steps = max(10, container_width // 200)  # More steps for wider content
+            # Try to find the button container
+            try:
+                button_container = self.driver.find_element(By.XPATH, button_container_xpath)
+                self.logger.info("✓ Found button container")
+            except NoSuchElementException:
+                self.logger.warning("Button container not found, trying alternatives...")
+                button_container = self.find_navigation_buttons()
+                if not button_container:
+                    self.logger.warning("No navigation buttons found, falling back to scroll method")
+                    self.fallback_scroll_method(container)
+                    return
 
-                for step in range(scroll_steps):
-                    scroll_position = (step + 1) * (container_width // scroll_steps)
-                    self.logger.info(f"Horizontal scroll step {step + 1}/{scroll_steps} to position {scroll_position}")
+            # Look for navigation buttons in the container
+            navigation_buttons = self.find_all_navigation_buttons(button_container)
 
-                    # Scroll horizontally
-                    self.driver.execute_script("arguments[0].scrollLeft = arguments[1]", container, scroll_position)
-
-                    # Wait for lazy loading (increased delay)
-                    time.sleep(2.5)  # Increased from 1-2 to 2.5 seconds
-
-                    # Check if new links appeared
-                    self.scrape_visible_links(container)
-                    new_links = len(self.scraped_links) - initial_links
-                    if new_links > 0:
-                        self.logger.info(f"Found {new_links} new links after horizontal scroll")
-                        initial_links = len(self.scraped_links)
-
-            # Vertical scrolling
-            if container_height > visible_height:
-                self.logger.info("Performing vertical scrolling...")
-                scroll_steps = max(5, container_height // 300)
-
-                for step in range(scroll_steps):
-                    scroll_position = (step + 1) * (container_height // scroll_steps)
-                    self.logger.info(f"Vertical scroll step {step + 1}/{scroll_steps} to position {scroll_position}")
-
-                    # Scroll vertically
-                    self.driver.execute_script("arguments[0].scrollTop = arguments[1]", container, scroll_position)
-
-                    # Wait for lazy loading
-                    time.sleep(2.5)
-
-                    # Check if new links appeared
-                    self.scrape_visible_links(container)
-                    new_links = len(self.scraped_links) - initial_links
-                    if new_links > 0:
-                        self.logger.info(f"Found {new_links} new links after vertical scroll")
-                        initial_links = len(self.scraped_links)
-
-            # Additional comprehensive scrolling patterns
-            self.logger.info("Performing comprehensive scrolling patterns...")
-
-            # Pattern 1: Scroll to end and back
-            self.driver.execute_script("arguments[0].scrollLeft = arguments[0].scrollWidth", container)
-            time.sleep(3)
-            self.scrape_visible_links(container)
-
-            self.driver.execute_script("arguments[0].scrollLeft = 0", container)
-            time.sleep(3)
-            self.scrape_visible_links(container)
-
-            # Pattern 2: Small incremental scrolls to trigger all lazy loading
-            current_scroll = 0
-            scroll_increment = 100
-            max_scroll = container_width
-
-            self.logger.info("Performing fine-grained horizontal scrolling...")
-            while current_scroll < max_scroll:
-                current_scroll += scroll_increment
-                self.driver.execute_script("arguments[0].scrollLeft = arguments[1]", container, current_scroll)
-                time.sleep(1.5)  # Shorter delay for small increments
-
-                # Every 5th scroll, do a longer wait and check for links
-                if current_scroll % (scroll_increment * 5) == 0:
-                    time.sleep(2)
-                    self.scrape_visible_links(container)
-                    new_total = len(self.scraped_links)
-                    self.logger.info(f"Scroll position {current_scroll}: {new_total} total links")
-
-            # Final wait and scrape
-            time.sleep(3)
-            self.scrape_visible_links(container)
+            if navigation_buttons:
+                self.navigate_with_buttons(navigation_buttons, container)
+            else:
+                self.logger.warning("No navigation buttons found, trying scroll method")
+                self.fallback_scroll_method(container)
 
         except Exception as e:
-            self.logger.warning(f"Scrolling failed: {str(e)}")
+            self.logger.error(f"Button navigation failed: {str(e)}")
+            self.logger.info("Falling back to scroll method...")
+            self.fallback_scroll_method(container)
+
+    def find_navigation_buttons(self):
+        """Find navigation button container using various selectors"""
+        button_selectors = [
+            # Alternative XPath patterns for the button container
+            "/html/body/div[3]/div/div[3]/div[2]/div/div[2]/span[1]/div/div/div[2]",
+            "/html/body/div[3]/div/div[3]/div[2]/div/div[2]/span[1]/div/div/div[1]",
+
+            # CSS selectors for common button patterns
+            "div[role='button']",
+            "button",
+            "[aria-label*='next']",
+            "[aria-label*='previous']",
+            "[aria-label*='scroll']",
+
+            # Look for elements with navigation-like classes
+            "//div[contains(@class, 'nav')]",
+            "//div[contains(@class, 'button')]",
+            "//div[contains(@class, 'scroll')]",
+            "//div[contains(@class, 'arrow')]",
+
+            # Look for clickable elements near the main container
+            "//div[@role='button'][contains(@style, 'cursor')]",
+            "//span[@role='button']",
+        ]
+
+        for selector in button_selectors:
+            try:
+                if selector.startswith("//") or selector.startswith("/html"):
+                    elements = self.driver.find_elements(By.XPATH, selector)
+                else:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+
+                if elements:
+                    self.logger.info(f"Found {len(elements)} potential button elements with: {selector}")
+                    return elements[0].find_element(By.XPATH, "..")  # Return parent container
+
+            except Exception as e:
+                continue
+
+        return None
+
+    def find_all_navigation_buttons(self, button_container):
+        """Find all navigation buttons (next, previous, etc.) in the container"""
+        button_patterns = [
+            # Look for buttons with navigation attributes
+            ".//div[@role='button']",
+            ".//button",
+            ".//span[@role='button']",
+            ".//div[contains(@aria-label, 'next')]",
+            ".//div[contains(@aria-label, 'previous')]",
+            ".//div[contains(@aria-label, 'scroll')]",
+
+            # Look for elements with click handlers
+            ".//div[@onclick]",
+            ".//div[contains(@style, 'cursor: pointer')]",
+            ".//div[contains(@style, 'cursor:pointer')]",
+
+            # Look for arrow-like elements
+            ".//div[contains(@class, 'arrow')]",
+            ".//div[contains(text(), '›')]",
+            ".//div[contains(text(), '‹')]",
+            ".//div[contains(text(), '>')]",
+            ".//div[contains(text(), '<')]",
+
+            # SVG icons that might be buttons
+            ".//svg/../..",
+            ".//svg/..",
+        ]
+
+        all_buttons = []
+
+        for pattern in button_patterns:
+            try:
+                buttons = button_container.find_elements(By.XPATH, pattern)
+                for button in buttons:
+                    if button not in all_buttons:
+                        # Check if element looks clickable
+                        if self.is_clickable_element(button):
+                            all_buttons.append(button)
+            except Exception as e:
+                continue
+
+        self.logger.info(f"Found {len(all_buttons)} potential navigation buttons")
+
+        # Debug: show button info
+        for i, button in enumerate(all_buttons[:5]):  # Show first 5
+            try:
+                tag = button.tag_name
+                text = button.text.strip()[:20]
+                aria_label = button.get_attribute('aria-label') or 'None'
+                onclick = button.get_attribute('onclick') or 'None'
+                self.logger.info(
+                    f"  Button {i + 1}: <{tag}> text='{text}' aria-label='{aria_label}' onclick='{onclick[:30]}...'")
+            except:
+                pass
+
+        return all_buttons
+
+    def is_clickable_element(self, element):
+        """Check if element appears to be clickable"""
+        try:
+            # Check various indicators of clickability
+            role = element.get_attribute('role')
+            if role in ['button', 'link']:
+                return True
+
+            onclick = element.get_attribute('onclick')
+            if onclick:
+                return True
+
+            cursor_style = element.value_of_css_property('cursor')
+            if cursor_style == 'pointer':
+                return True
+
+            # Check if it has click event listeners
+            has_listeners = self.driver.execute_script("""
+                var element = arguments[0];
+                var listeners = getEventListeners(element);
+                return listeners && listeners.click && listeners.click.length > 0;
+            """, element)
+
+            if has_listeners:
+                return True
+
+        except:
+            pass
+
+        return False
+
+    def navigate_with_buttons(self, buttons, container):
+        """Navigate through content by clicking buttons with proper delays"""
+        self.logger.info(f"Navigating with {len(buttons)} buttons...")
+
+        # Initial scrape
+        self.scrape_visible_links(container)
+        initial_count = len(self.scraped_links)
+
+        # Try clicking each button multiple times to navigate through all content
+        max_clicks_per_button = 50  # Adjust based on expected content amount
+
+        for button_index, button in enumerate(buttons):
+            self.logger.info(f"Trying button {button_index + 1}/{len(buttons)}")
+
+            clicks_without_new_content = 0
+            total_clicks = 0
+
+            while total_clicks < max_clicks_per_button and clicks_without_new_content < 5:
+                try:
+                    # Get current link count
+                    before_click_count = len(self.scraped_links)
+
+                    # Click the button
+                    self.driver.execute_script("arguments[0].click();", button)
+                    total_clicks += 1
+
+                    # Wait for lazy loading (2.5 seconds as requested)
+                    self.logger.info(f"  Click {total_clicks}: Waiting 2.5s for lazy loading...")
+                    time.sleep(2.5)
+
+                    # Scrape new content
+                    self.scrape_visible_links(container)
+                    after_click_count = len(self.scraped_links)
+
+                    new_links = after_click_count - before_click_count
+                    if new_links > 0:
+                        self.logger.info(f"  ✓ Found {new_links} new links (total: {after_click_count})")
+                        clicks_without_new_content = 0
+                    else:
+                        clicks_without_new_content += 1
+                        self.logger.info(f"  No new links found ({clicks_without_new_content}/5 empty clicks)")
+
+                    # Check if we've reached the end (button might become disabled or change)
+                    if self.is_button_disabled(button):
+                        self.logger.info(f"  Button appears disabled, moving to next button")
+                        break
+
+                except Exception as e:
+                    self.logger.warning(f"  Error clicking button: {str(e)}")
+                    clicks_without_new_content += 1
+                    if clicks_without_new_content >= 3:
+                        break
+
+            self.logger.info(
+                f"Button {button_index + 1} completed: {total_clicks} clicks, {len(self.scraped_links)} total links")
+
+        final_count = len(self.scraped_links)
+        self.logger.info(f"Navigation completed: {final_count - initial_count} new links found")
+
+    def is_button_disabled(self, button):
+        """Check if a button appears to be disabled"""
+        try:
+            # Check disabled attribute
+            if button.get_attribute('disabled'):
+                return True
+
+            # Check aria-disabled
+            if button.get_attribute('aria-disabled') == 'true':
+                return True
+
+            # Check if button has disabled-like classes
+            class_attr = button.get_attribute('class') or ''
+            if any(disabled_class in class_attr.lower() for disabled_class in ['disabled', 'inactive', 'hidden']):
+                return True
+
+            # Check opacity (sometimes disabled buttons are faded)
+            opacity = button.value_of_css_property('opacity')
+            if opacity and float(opacity) < 0.5:
+                return True
+
+        except:
+            pass
+
+        return False
+
+    def fallback_scroll_method(self, container):
+        """Fallback to original scrolling method if buttons don't work"""
+        self.logger.info("Using fallback scroll method...")
+
+        try:
+            # Get container dimensions
+            container_width = self.driver.execute_script("return arguments[0].scrollWidth", container)
+            visible_width = self.driver.execute_script("return arguments[0].clientWidth", container)
+
+            if container_width > visible_width:
+                self.logger.info(f"Scrolling through {container_width}px of content...")
+
+                # Scroll in increments with delays
+                scroll_increment = 200
+                current_scroll = 0
+
+                while current_scroll < container_width:
+                    self.driver.execute_script("arguments[0].scrollLeft = arguments[1]", container, current_scroll)
+                    time.sleep(2.5)  # Same delay as button method
+                    self.scrape_visible_links(container)
+                    current_scroll += scroll_increment
+
+                    if current_scroll % 1000 == 0:  # Log progress every 1000px
+                        self.logger.info(f"Scrolled to {current_scroll}px, {len(self.scraped_links)} links found")
+
+        except Exception as e:
+            self.logger.error(f"Fallback scroll failed: {str(e)}")
 
     def scrape_all_links(self, container):
         """Final comprehensive scrape of all links with additional scrolling strategies"""
@@ -357,7 +540,7 @@ class HokusaiLinkScraper:
 
             # Scroll with arrow keys (simulates user interaction)
             for _ in range(20):
-                actions.send_keys_to_element(container, u'\ue014')  # Right arrow
+                actions.send_keys_to_element(container, Keys.ARROW_RIGHT)
                 actions.perform()
                 time.sleep(0.5)
 
